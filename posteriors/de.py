@@ -145,15 +145,13 @@ class DeepEnsembleClassification(object):
                                                                     model=self.network_list[idx],
                                                                     loss_fn=nll_func,
                                                                     optimizer=opt_list[idx],
-                                                                    scheduler=sched_list[idx],
-                                                                    device=self.device)
+                                                                    scheduler=sched_list[idx])
                 elif self.target == 'binary':
                     train_nll, train_acc = utils.training.train_loop_binary(dataloader=loader, 
                                                                     model=self.network_list[idx],
                                                                     loss_fn=nll_func,
                                                                     optimizer=opt_list[idx],
-                                                                    scheduler=sched_list[idx],
-                                                                    device=self.device)
+                                                                    scheduler=sched_list[idx])
                 
                 if extra_verbose:
                     metrics = {'train nll': train_nll,
@@ -186,7 +184,7 @@ class DeepEnsembleClassification(object):
     
     def UncertaintyPrediction(self, loader):
         predictions = self.test(loader) # M x N x C
-        return predictions.softmax(-1).mean(0), predictions.softmax(-1).var(0)
+        return predictions.softmax(-1).mean(0).cpu(), predictions.softmax(-1).var(0).cpu()
     
 
 def train_loop(loader, model, optimizer, nll_func, mse_func, scheduler=None, device='cpu'):

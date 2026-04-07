@@ -220,6 +220,8 @@ def get_dataset(name, subsample):
 
         print('loaded datasets')
 
+    test_data, val_data = torch.utils.data.random_split(test_data,[len(test_data)-2000,2000])
+
     if subsample:
         n_train = 1000
         n_test = 100
@@ -227,6 +229,8 @@ def get_dataset(name, subsample):
         test_data = torch.utils.data.Subset(test_data,range(n_test))
         val_data = torch.utils.data.Subset(val_data,range(n_test))
         ood_test_data = torch.utils.data.Subset(ood_test_data,range(n_test))
+
+    
 
     return training_data, test_data, val_data, ood_test_data, n_output, n_channels, input_size
 

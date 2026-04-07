@@ -10,9 +10,10 @@ device = (
     else "cpu"
 )
 
-def train_loop(dataloader, model, loss_fn, optimizer, scheduler, device='cpu', train_mode=True):
+def train_loop(dataloader, model, loss_fn, optimizer, scheduler, train_mode=True):
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
+    device = next(model.parameters()).device
     if train_mode:
         model.train()
     else:
@@ -43,9 +44,10 @@ def train_loop(dataloader, model, loss_fn, optimizer, scheduler, device='cpu', t
 
     return train_loss, correct
 
-def train_loop_binary(dataloader, model, loss_fn, optimizer, scheduler, device='cpu', train_mode=True):
+def train_loop_binary(dataloader, model, loss_fn, optimizer, scheduler, train_mode=True):
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
+    device = next(model.parameters()).device
     if train_mode:
         model.train()
     else:
@@ -87,6 +89,7 @@ def test_loop(dataloader, model, loss_fn, verbose=False):
 
     # Evaluating the model with torch.no_grad() ensures that no gradients are computed during test mode
     # also serves to reduce unnecessary gradient computations and memory usage for tensors with requires_grad=True
+    device = next(model.parameters()).device
     with torch.no_grad():
         for X, y in dataloader:
             X,y = X.to(device), y.to(device)

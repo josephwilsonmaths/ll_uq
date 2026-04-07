@@ -242,12 +242,13 @@ class SWAG(torch.nn.Module):
 
     def test(self, loader, samples):
 
+        device = next(self.swag_net.parameters()).device
         prediction_samples = []
         for _ in tqdm.trange(samples):
             self.sample(cov=True)
             batches = []
             for x,_ in loader:
-                batches.append(self.forward(x=x).detach()) # output is (batchsize x output)
+                batches.append(self.forward(x=x.to(device)).detach()) # output is (batchsize x output)
             batches = torch.cat(batches, dim=0)
             prediction_samples.append(batches)
         prediction_samples = torch.stack(prediction_samples, dim=0)

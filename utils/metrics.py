@@ -7,6 +7,40 @@ from torchmetrics.classification import MulticlassCalibrationError
 import utils.datasets as ds
 import time
 
+
+def multiclass_probit_probs(map_logits, logit_var, eps=1e-8):
+    """
+    Approximate predictive class probabilities from Gaussian logits using
+    class-wise multi-class probit scaling.
+
+    map_logits: N x C MAP logits
+    logit_var: N x C predictive logit variances
+    """
+    var = torch.clamp(logit_var, min=0.0)
+    kappa = torch.rsqrt(1.0 + (torch.pi / 8.0) * var)
+    scaled_logits = map_logits * kappa
+    probs = torch.softmax(scaled_logits, dim=1)
+    return torch.clamp(probs, min=eps, max=1.0)
+
+
+def compute_lppd_multiclass_probit(test_loader, map_logits, logit_var, reduction='sum'):
+    """
+    Compute LPPD on the test set using multi-class probit approximation.
+
+    reduction='sum' returns the canonical LPPD sum over test points.
+    reduction='mean' returns average log predictive density.
+    """
+    targets = torch.cat([y for _, y in test_loader]).to(map_logits.device)
+    probs = multiclass_probit_probs(map_logits, logit_var)
+    logp = torch.log(probs[torch.arange(len(targets), device=targets.device), targets])
+
+    if reduction == 'sum':
+        return logp.sum().item()
+    elif reduction == 'mean':
+        return logp.mean().item()
+    else:
+        raise ValueError("reduction must be one of ['sum', 'mean']")
+
 def compute_metrics(test_loader, id_mean, id_var, ood_mean, ood_var, variance=True, sum=True):
     test_targets = torch.cat([y for _,y in test_loader])
     ece_compute = MulticlassCalibrationError(num_classes=id_mean.shape[1],n_bins=10,norm='l1')
@@ -57,6 +91,83 @@ def aucroc(id_scores,ood_scores):
     labels[:id_scores.shape[0]] += 1
     examples = np.squeeze(np.hstack((id_scores, ood_scores)))
     return sk.roc_auc_score(labels, examples)
+
+def binary_aucroc_from_scores(id_scores, ood_scores):
+    """Compute AUCROC where higher score implies OOD (positive class)."""
+    id_scores = np.asarray(id_scores).reshape(-1)
+    ood_scores = np.asarray(ood_scores).reshape(-1)
+    n_neg = id_scores.shape[0]
+    n_pos = ood_scores.shape[0]
+    if n_neg == 0 or n_pos == 0:
+        return float('nan')
+
+    scores = np.concatenate([id_scores, ood_scores])
+    labels = np.concatenate([np.zeros(n_neg, dtype=np.int64), np.ones(n_pos, dtype=np.int64)])
+
+    order = np.argsort(scores, kind='mergesort')
+    sorted_scores = scores[order]
+    ranks = np.empty(scores.shape[0], dtype=np.float64)
+
+    i = 0
+    while i < sorted_scores.shape[0]:
+        j = i + 1
+        while j < sorted_scores.shape[0] and sorted_scores[j] == sorted_scores[i]:
+            j += 1
+        avg_rank = 0.5 * (i + j - 1) + 1.0
+        ranks[order[i:j]] = avg_rank
+        i = j
+
+    pos_ranks_sum = ranks[labels == 1].sum()
+    auc = (pos_ranks_sum - (n_pos * (n_pos + 1) / 2.0)) / (n_pos * n_neg)
+    return float(auc)
+
+def samples_to_probabilities(sample_outputs, eps=1e-8):
+    """
+    Convert sampled classifier outputs of shape S x N x C into probabilities.
+    If samples already look like probabilities, return a clamped copy.
+    """
+    probs = sample_outputs.detach().cpu()
+    if probs.dim() != 3:
+        raise ValueError("sample_outputs must have shape S x N x C")
+
+    # Some samplers return probabilities directly, while others return logits.
+    sums = probs.sum(dim=-1)
+    is_prob_like = torch.all(probs >= 0.0) and torch.all(torch.abs(sums - 1.0) < 1e-4)
+    if not is_prob_like:
+        probs = probs.softmax(dim=-1)
+
+    return torch.clamp(probs, min=eps, max=1.0)
+
+def mutual_information_from_prob_samples(prob_samples, eps=1e-8):
+    """
+    Compute per-example predictive mutual information from sampled probabilities.
+    prob_samples shape: S x N x C
+    returns shape: N
+    """
+    probs = torch.clamp(prob_samples.detach().cpu(), min=eps, max=1.0)
+    mean_probs = probs.mean(dim=0)
+
+    predictive_entropy = -(mean_probs * torch.log(mean_probs)).sum(dim=1)
+    expected_entropy = -(probs * torch.log(probs)).sum(dim=2).mean(dim=0)
+    mi = predictive_entropy - expected_entropy
+    return torch.clamp(mi, min=0.0)
+
+def compute_mi_varroc_metrics(test_loader, id_mean, id_prob_samples, ood_prob_samples):
+    """
+    Compute VARROC-ID and VARROC-OOD using mutual information scores.
+    """
+    test_targets = torch.cat([y for _, y in test_loader]).cpu()
+    index_correct = sort_preds_index(id_mean.cpu(), test_targets)
+
+    id_mi = mutual_information_from_prob_samples(id_prob_samples)
+    ood_mi = mutual_information_from_prob_samples(ood_prob_samples)
+
+    id_correct_mi = id_mi[index_correct]
+    id_incorrect_mi = id_mi[~index_correct]
+
+    varroc_id_mi = binary_aucroc_from_scores(id_correct_mi.numpy(), id_incorrect_mi.numpy())
+    varroc_ood_mi = binary_aucroc_from_scores(id_correct_mi.numpy(), ood_mi.numpy())
+    return varroc_id_mi, varroc_ood_mi
 
 def ood_auc(id_scores,ood_scores):
     '''
@@ -261,20 +372,22 @@ def print_results(m, test_res, ei, train_res=None):
         if train_res is not None:
             print(f"Train Results -- Loss: {train_res[m]['nll'][ei]:.3f}; Train Acc: {train_res[m]['acc'][ei]:.1%}")
         t = time.strftime("%H:%M:%S", time.gmtime(test_res[m]['time'][ei]))
-        s = f"Test Results -- Acc.: {test_res[m]['acc'][ei]:.1%}; ECE: {test_res[m]['ece'][ei]:.1%}; NLL: {test_res[m]['nll'][ei]:.3}; OOD-AUC: {test_res[m]['oodauc'][ei]:.1%}; AUC-ROC: {test_res[m]['aucroc'][ei]:.1%};"
+        s = f"Test Results -- Acc.: {test_res[m]['acc'][ei]:.1%}; ECE: {test_res[m]['ece'][ei]:.1%}; NLL: {test_res[m]['nll'][ei]:.3}; LPPD: {test_res[m]['lppd'][ei]:.3}; OOD-AUC: {test_res[m]['oodauc'][ei]:.1%}; AUC-ROC: {test_res[m]['aucroc'][ei]:.1%};"
         if m != 'MAP':
             s += f" VAR-ROC: {test_res[m]['varroc'][ei]:.1%}; VAR-ROC-ID: {test_res[m]['varroc_id'][ei]:.1%}; VAR-ROC-OOD: {test_res[m]['varroc_ood'][ei]:.1%}; VARROC-ROT: {test_res[m]['varroc_rot'][ei]:.1%};"
-        s += f" Time h:m:s: {t}"
+            s += f" VAR-ROC-ID-MI: {test_res[m]['varroc_id_mi'][ei]:.1%}; VAR-ROC-OOD-MI: {test_res[m]['varroc_ood_mi'][ei]:.1%};"
+        s += f" Time h:m:s: {t}; Max Mem (GB): {test_res[m]['mem'][ei]:.3f}"
         print(s + "\n")
     else:
         print(f"\n--- Method {m} ---")
         if train_res is not None:
             print(f"Train Results -- SQ Loss: {train_res[m]['sq loss']:.3f}; CE Loss: {train_res[m]['ce loss']:.3f}; Acc: {train_res[m]['acc']:.3f}")
         t = time.strftime("%H:%M:%S", time.gmtime(test_res[m]['time']))
-        s = f"Test Results -- Acc.: {test_res[m]['acc']:.1%}; ECE: {test_res[m]['ece']:.1%}; NLL: {test_res[m]['nll']:.3}; OOD-AUC: {test_res[m]['oodauc']:.1%}; AUC-ROC: {test_res[m]['aucroc']:.1%};"
+        s = f"Test Results -- Acc.: {test_res[m]['acc']:.1%}; ECE: {test_res[m]['ece']:.1%}; NLL: {test_res[m]['nll']:.3}; LPPD: {test_res[m]['lppd']:.3}; OOD-AUC: {test_res[m]['oodauc']:.1%}; AUC-ROC: {test_res[m]['aucroc']:.1%};"
         if m != 'MAP':
             s += f" VAR-ROC: {test_res[m]['varroc']:.1%}; VAR-ROC-ID: {test_res[m]['varroc_id']:.1%}; VAR-ROC-OOD: {test_res[m]['varroc_ood']:.1%}; VARROC-ROT: {test_res[m]['varroc_rot']:.1%};"
-        s += f" Time h:m:s: {t}"
+            s += f" VAR-ROC-ID-MI: {test_res[m]['varroc_id_mi']:.1%}; VAR-ROC-OOD-MI: {test_res[m]['varroc_ood_mi']:.1%};"
+        s += f" Time h:m:s: {t}; Max Mem (GB): {test_res[m]['mem']:.3f}"
         print(s + "\n")
 
 def write_results_nuqls(results : str, train_res : dict, test_res : dict, epoch, gamma):

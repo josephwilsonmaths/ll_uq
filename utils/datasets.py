@@ -22,6 +22,8 @@ def read_regression(dataset_str):
         df = pd.read_csv('./data/protein/CASP.csv')
     elif dataset_str == 'wine':
         df = pd.read_csv('./data/wine/winequality-red.csv', sep=r';')
+    elif dataset_str == 'wine_white':
+        df = pd.read_csv('./data/wine/winequality-white.csv', sep=r';')
     elif dataset_str == 'yacht':
         df = pd.read_csv('./data/yacht/yacht_hydrodynamics.data', sep=r'\s{1,}')
     elif dataset_str == 'song':
