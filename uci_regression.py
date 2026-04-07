@@ -9,10 +9,13 @@ import argparse
 import time
 import os
 import configparser
+import matplotlib.pyplot as plt
 import utils.datasets
 import utils.models 
 import json
 import utils.regression_util as utility
+from utils.metrics import binary_aucroc_from_scores
+from scipy.stats import spearmanr
 # import posteriors.cuqls as cuqls
 
 import LinearSampling.Posteriors
@@ -51,6 +54,9 @@ print(f"\n Using {device} device")
 config = configparser.ConfigParser()
 config.read('utils/regression.ini')
 df = utils.datasets.read_regression(args.dataset)
+wine_ood_df = None
+if args.dataset == 'wine':
+    wine_ood_df = utils.datasets.read_regression('wine_white').values
 n_experiment = config.getint(args.dataset,'n_experiment')
 input_start = config.getint(args.dataset,'input_start')
 input_dim = config.getint(args.dataset,'input_dim')
@@ -97,6 +103,19 @@ if normalize:
     sy = dataset_numpy[:,target_dim].std(0)
     sy = np.where(sy==0,1,sy)
 
+wine_ood_dataset = None
+if args.dataset == 'wine' and wine_ood_df is not None:
+    wine_ood_dataset = utils.datasets.RegressionDataset(
+        wine_ood_df,
+        input_start=input_start,
+        input_dim=input_dim,
+        target_dim=target_dim,
+        mX=mx,
+        sX=sx,
+        my=my,
+        sy=sy,
+    )
+
 # Setup metrics
 methods = ['MAP','DNN-GLM','LL-GLM']
 train_methods = ['MAP','DNN-GLM','LL-GLM']
@@ -109,6 +128,7 @@ for m in methods:
     test_res[m] = {'rmse': [],
                 'nll': [],
                 'ece': [],
+                'aucroc_var_ood': [],
                 'time': []}
 
 # Iterate through number of experiments
@@ -200,11 +220,13 @@ for ei in tqdm(range(n_experiment)):
                                         left=0.01,
                                         right=10000,
                                         its=100,
-                                        verbose=args.extra_verbose
+                                        verbose=args.extra_verbose,
+                                        task='ece'
             )
 
             mean_pred, var_pred = dnn_glm.UncertaintyPrediction(test=test_dataset,
-                                                            bs=batch_size)
+                                                            bs=batch_size,
+                                                            scale=True)
 
         elif m == 'LL-GLM':
             ll_glm = LinearSampling.Posteriors.Posterior(network=map_net, 
@@ -228,11 +250,14 @@ for ei in tqdm(range(n_experiment)):
                                         left=0.01,
                                         right=10000,
                                         its=100,
-                                        verbose=args.extra_verbose
+                                        verbose=args.extra_verbose,
+                                        task='ece'
+
             )
 
             mean_pred, var_pred = ll_glm.UncertaintyPrediction(test=test_dataset,
-                                                            bs=batch_size)
+                                                            bs=batch_size,
+                                                            scale=True)
 
         print(f"\n--- Method {m} ---")
         t2 = time.time()
@@ -247,17 +272,42 @@ for ei in tqdm(range(n_experiment)):
         if m != 'MAP':
             test_res[m]['time'].append(t2-t1)
 
-            test_res[m]['rmse'].append(torch.sqrt(mse_loss(mean_pred.detach().cpu().reshape(-1,1),test_y.reshape(-1,1))).detach().cpu().item())
+            mean_pred_cpu = mean_pred.detach().cpu().reshape(-1)
+            var_pred_cpu = var_pred.detach().cpu().reshape(-1)
+            test_y_cpu = test_y.detach().cpu().reshape(-1)
 
-            test_res[m]['nll'].append(nll(mean_pred.detach().cpu().reshape(-1,1),test_y.reshape(-1,1),var_pred.detach().cpu().reshape(-1,1)).detach().cpu().item())
+            test_res[m]['rmse'].append(torch.sqrt(mse_loss(mean_pred_cpu.reshape(-1,1),test_y_cpu.reshape(-1,1))).detach().cpu().item())
+
+            test_res[m]['nll'].append(nll(mean_pred_cpu.reshape(-1,1),test_y_cpu.reshape(-1,1),var_pred_cpu.reshape(-1,1)).detach().cpu().item())
 
             observed_conf, predicted_conf = utility.calibration_curve_r(test_y,mean_pred,var_pred,11)
             test_res[m]['ece'].append(torch.mean(torch.square(observed_conf - predicted_conf)).detach().cpu().item())
 
+            if args.dataset == 'wine' and wine_ood_dataset is not None:
+                if m == 'DNN-GLM':
+                    _, ood_var_pred = dnn_glm.UncertaintyPrediction(test=wine_ood_dataset, bs=batch_size, scale=True)
+                else:
+                    _, ood_var_pred = ll_glm.UncertaintyPrediction(test=wine_ood_dataset, bs=batch_size, scale=True)
+
+                aucroc_var_ood = binary_aucroc_from_scores(
+                    id_scores=var_pred_cpu.numpy(),
+                    ood_scores=ood_var_pred.detach().cpu().reshape(-1).numpy(),
+                )
+                if np.isnan(aucroc_var_ood):
+                    aucroc_var_ood = 0.0
+                test_res[m]['aucroc_var_ood'].append(float(aucroc_var_ood))
+            else:
+                test_res[m]['aucroc_var_ood'].append(0.0)
+
             print("\nTest Prediction:")
             t = test_res[m]['time'][ei]
             print(f'Time(s): {t:.3f}')
-            print(f"RMSE.: {test_res[m]['rmse'][ei]:.3f}; NLL: {test_res[m]['nll'][ei]:.3f}; ECE: {test_res[m]['ece'][ei]:.1%}")
+            print(
+                f"RMSE.: {test_res[m]['rmse'][ei]:.3f}; "
+                f"NLL: {test_res[m]['nll'][ei]:.3f}; "
+                f"ECE: {test_res[m]['ece'][ei]:.1%}; "
+                f"AUCROC(var, red-vs-white): {test_res[m]['aucroc_var_ood'][ei]:.3f}; "
+            )
         print('\n')
 
 ## Record results
