@@ -65,7 +65,8 @@ parser.add_argument('--sms_config', default='utils/classification_sms_ubu.ini', 
 parser.add_argument('--subsample', action='store_true', help='Use less datapoints for train and test.')
 parser.add_argument('--save_var', action='store_true', help='save variances if on (memory consumption)')
 parser.add_argument('--pre_load', action='store_true', help='use pre-trained weights (must have saved state_dict() for correct model + dataset)')
-parser.add_argument('--glm_pre_load', action='store_true', help='use pre-trained weights (must have saved state_dict() for correct model + dataset)')
+parser.add_argument('--dnn_pre_load', action='store_true', help='use pre-trained weights (must have saved state_dict() for correct model + dataset)')
+parser.add_argument('--ll_pre_load', action='store_true', help='use pre-trained weights (must have saved state_dict() for correct model + dataset)')
 parser.add_argument('--verbose', action='store_true',help='verbose flag for all methods')
 parser.add_argument('--extra_verbose', action='store_true',help='extra verbose flag for some methods')
 parser.add_argument('--progress', action='store_false')
@@ -252,7 +253,7 @@ for ei in tqdm.trange(config['n_experiment']):
                                                                 precision=precision)
             network_mean = True
             eval_bs_dnn = 50
-            if not args.glm_pre_load:
+            if not args.dnn_pre_load:
                 loss_dict = dnn_glm.train(train=dataset.training_data, 
                                     bs=config['dnn_bs'], 
                                     S=config['dnn_S'],
@@ -300,7 +301,7 @@ for ei in tqdm.trange(config['n_experiment']):
                                                                 task='classification',
                                                                 precision=precision)
             network_mean = True
-            if not args.glm_pre_load:
+            if not args.ll_pre_load:
                 loss_dict = ll_glm.train(train=dataset.training_data, 
                                     bs=config['ll_bs'], 
                                     S=config['ll_S'],

@@ -27,7 +27,6 @@ def get_dataset(name, subsample):
             transform=ToTensor()
         )
 
-        _, val_data = torch.utils.data.random_split(training_data,[50000,10000])
         n_output = 10
         n_channels = 1
         input_size = 28
@@ -54,7 +53,6 @@ def get_dataset(name, subsample):
             transform=ToTensor()
         ) 
 
-        _, val_data = torch.utils.data.random_split(training_data,[50000,10000])
         n_output = 10
         n_channels = 1
         input_size = 28
@@ -93,7 +91,6 @@ def get_dataset(name, subsample):
             transform=transform_test
         ) 
 
-        _, val_data = torch.utils.data.random_split(training_data,[40000,10000])
         n_output = 10
         n_channels = 3
         input_size = 32
@@ -137,7 +134,6 @@ def get_dataset(name, subsample):
             transform=transform_test_cifar
         ) 
 
-        _, val_data = torch.utils.data.random_split(training_data,[0.9,0.1])
         n_output = 10
         n_channels = 3
         input_size = 32
@@ -176,7 +172,6 @@ def get_dataset(name, subsample):
             transform=transform_test
         ) 
 
-        _, val_data = torch.utils.data.random_split(training_data,[50000,10000])
         n_output = 100
         n_channels = 3
         input_size = 32
@@ -210,13 +205,12 @@ def get_dataset(name, subsample):
 
         print('loading datasets')
 
-        ood_test_data = datasets.ImageFolder(r'data/imagenet-o/imagenet-o', transform=ood_transform)
+        # ood_test_data = datasets.ImageFolder(r'data/imagenet-o/imagenet-o', transform=ood_transform)
+        ood_test_data = datasets.ImageFolder(r'data/iNaturalist', transform=ood_transform)
 
         n_output = 1000
         n_channels = 3
         input_size = 224
-
-        val_data = test_data
 
         print('loaded datasets')
 

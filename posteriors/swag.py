@@ -74,7 +74,8 @@ class SWAG(torch.nn.Module):
     def __init__(self,net,epochs=50,lr=1e-3,cov_mat=True,max_num_models=0,var_clamp=1e-30,wd=0,target='multiclass'):
         super(SWAG,self).__init__()
         self.swag_net = copy.deepcopy(net)
-
+        self.swag_net.to(device)
+        
         self.register_buffer("n_models", torch.zeros([1], dtype=torch.long))
         self.params = []
 
@@ -105,7 +106,8 @@ class SWAG(torch.nn.Module):
             # print(np,i)
 
     def forward(self, x):
-        # self.swag_net.to(device)
+        param = next(self.swag_net.parameters())
+        x = x.to(device=param.device, dtype=param.dtype)
         return self.swag_net(x)
         
     def train_swag(self,train_dataloader, progress_bar=True):
@@ -432,11 +434,15 @@ class SWAG_R(torch.nn.Module):
 
 def train_loop(dataloader, model, loss_fn, optimizer, scheduler):
         model.train()
+        param = next(model.parameters())
+        model_device = param.device
+        model_dtype = param.dtype
         size = len(dataloader.dataset)
         num_batches = len(dataloader)    
         train_loss, correct = 0, 0
         for _, (X, y) in enumerate(dataloader):
-            X,y = X.to(device), y.to(device)
+            X = X.to(device=model_device, dtype=model_dtype)
+            y = y.to(model_device)
             # Compute prediction and loss
             pred = model(X)
             loss = loss_fn(pred, y)
@@ -465,11 +471,15 @@ def train_loop_binary(dataloader, model, loss_fn, optimizer, scheduler, device='
         model.train()
     else:
         model.eval()
+    param = next(model.parameters())
+    model_device = param.device
+    model_dtype = param.dtype
     size = len(dataloader.dataset)
     num_batches = len(dataloader)    
     train_loss, correct = 0, 0
     for batch, (X, y) in enumerate(dataloader):
-        X,y = X.to(device), y.to(device)
+        X = X.to(device=model_device, dtype=model_dtype)
+        y = y.to(model_device)
         # Compute prediction and loss
         pred = model(X)
         loss = loss_fn(pred, y.to(dtype=torch.float64).unsqueeze(1))
